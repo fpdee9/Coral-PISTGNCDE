@@ -153,7 +153,7 @@ def main():
         mse_loss = ((train_pred - train_y) ** 2 * train_mask).sum() / (train_mask.sum() + 1e-6)
         mae_loss = (torch.abs(train_pred - train_y) * train_mask).sum() / (train_mask.sum() + 1e-6)
         
-        path_loss = (0.4 * mse_loss) + (0.6 * mae_loss)
+        path_loss = (0.2 * mse_loss) + (0.8 * mae_loss)
         
         # INITIAL STATE ANCHOR
         # Use the continuous backfilled tensor JUST for t=0, to ensure the anchor holds

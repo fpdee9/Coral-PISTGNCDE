@@ -202,7 +202,7 @@ class CoralSTGNCDE(nn.Module):
             baseline_mortality = -MORTALITY_SCALE * current_coral
             recovery_stress = torch.relu(dhw_raw - RECOVERY_SUPPRESSION_THRESHOLD)
             soft_no_stress = torch.exp(-recovery_stress * 2.0)
-            rebound_boost = soft_ceiling * REBOUND_SCALE * soft_no_stress
+            rebound_boost = (1.0 - current_coral) * REBOUND_SCALE * soft_no_stress
             ai_recovery = baseline_mortality + neural_recovery + rebound_boost
 
             # Preserving the Autograd Graph otherwise PyTorch will sever the gradient back to the projector.
