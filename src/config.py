@@ -7,6 +7,7 @@ import torch
 # 1. File Paths
 DATA_DIR = "data/processed/"
 MODEL_PATH = "coral_model_best.pth"
+# MODEL_PATH = "coral_model_latest.pth"
 MODEL_LATEST_PATH = "coral_model_latest.pth"
 PLOT_DIR = "results/plots/"
 NEIGHBORHOOD_PLOT_DIR = "results/neighborhood_plots/"
@@ -20,7 +21,7 @@ HIDDEN_DIM = 64
 EMBED_DIM = 16
 
 # 4. Training Hyperparameters
-EPOCHS = 1000
+EPOCHS = 2000
 LR = 0.0003
 WEIGHT_DECAY = 1e-5
 INIT_LOSS_WEIGHT = 10.0

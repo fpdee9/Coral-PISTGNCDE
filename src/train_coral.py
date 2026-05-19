@@ -115,10 +115,9 @@ def main():
     # Weight Decay helps prevent getting stuck
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-4)
 
-    # T_0=50 triggers the first massive reset right when the anchor snaps!
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, 
-        T_0=50, 
+        T_0=100, 
         T_mult=2, 
         eta_min=1e-5
     )
