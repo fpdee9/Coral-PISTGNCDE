@@ -79,8 +79,9 @@ def evaluate_naive(y_eval, mask_eval, split_idx):
     naive_pred = last_obs.unsqueeze(0).expand(test_y.shape[0], -1, 1)
     
     rmse = torch.sqrt(((naive_pred - test_y) ** 2 * test_mask).sum() / (test_mask.sum() + 1e-6)).item()
+    mae = ((torch.abs(naive_pred - test_y)) * test_mask).sum() / (test_mask.sum() + 1e-6) # MAE added
     dca, tce, far = calculate_trend_metrics(test_y, naive_pred, test_mask)
-    return rmse, dca, tce, far
+    return rmse, mae.item(), dca, tce, far
 
 def evaluate_starima(y_raw, mask_raw, split_idx):
     print("Evaluating VAR...")
@@ -94,16 +95,17 @@ def evaluate_starima(y_raw, mask_raw, split_idx):
         test_y, test_mask = y_raw.permute(1, 0, 2).to(DEVICE)[split_idx:], mask_raw.permute(1, 0, 2).to(DEVICE)[split_idx:]
         
         rmse = torch.sqrt(((forecast_tensor - test_y)**2 * test_mask).sum() / (test_mask.sum() + 1e-6)).item()
+        mae = ((torch.abs(forecast_tensor - test_y)) * test_mask).sum() / (test_mask.sum() + 1e-6) # MAE added
         dca, tce, far = calculate_trend_metrics(test_y, forecast_tensor, test_mask)
-        return rmse, dca, tce, far
+        return rmse, mae.item(), dca, tce, far
     except Exception as e:
-        return float('nan'), 0.0, 100.0, 100.0
+        return float('nan'), float('nan'), 0.0, 100.0, 100.0
 
 def evaluate_deep_learning(model_type, X_seq, y_eval, mask_eval, split_idx, input_features, num_sites):
     print(f"Training Deep Learning Baseline: {model_type}...")
     model = BaselineGRU(input_features, HIDDEN_DIM, num_sites).to(DEVICE) if model_type == "GRU" else ConventionalMLP(input_features, HIDDEN_DIM).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    best_rmse, best_dca, best_tce, best_far = float('inf'), 0.0, 100.0, 100.0
+    best_rmse, best_mae, best_dca, best_tce, best_far = float('inf'), float('inf'), 0.0, 100.0, 100.0
     
     for epoch in range(300):
         model.train()
@@ -120,11 +122,13 @@ def evaluate_deep_learning(model_type, X_seq, y_eval, mask_eval, split_idx, inpu
                 eval_preds = model(X_seq)
                 test_pred, test_y, test_mask = eval_preds[split_idx:], y_eval[split_idx:], mask_eval[split_idx:]
                 test_rmse = torch.sqrt(((test_pred - test_y)**2 * test_mask).sum() / (test_mask.sum() + 1e-6)).item()
+                test_mae = ((torch.abs(test_pred - test_y)) * test_mask).sum() / (test_mask.sum() + 1e-6) # MAE Added
                 
                 if test_rmse < best_rmse:
                     best_rmse = test_rmse
+                    best_mae = test_mae.item()
                     best_dca, best_tce, best_far = calculate_trend_metrics(test_y, test_pred, test_mask)
-    return best_rmse, best_dca, best_tce, best_far
+    return best_rmse, best_mae, best_dca, best_tce, best_far
 
 def main():
     print("=== COMMENCING BASELINE BENCHMARKING ===")
@@ -138,38 +142,39 @@ def main():
     X_env_only = X_augmented[:, :, :3].permute(1, 0, 2).to(DEVICE) 
     env_features = 3
     
-    n_rmse, n_dca, n_tce, n_far = evaluate_naive(y_eval, mask_eval, SPLIT_IDX)
-    s_rmse, s_dca, s_tce, s_far = evaluate_starima(y_raw, mask_raw, SPLIT_IDX)
-    m_rmse, m_dca, m_tce, m_far = evaluate_deep_learning("Conventional (MLP)", X_env_only, y_eval, mask_eval, SPLIT_IDX, env_features, num_sites)
-    g_rmse, g_dca, g_tce, g_far = evaluate_deep_learning("GRU", X_env_only, y_eval, mask_eval, SPLIT_IDX, env_features, num_sites)
+    n_rmse, n_mae, n_dca, n_tce, n_far = evaluate_naive(y_eval, mask_eval, SPLIT_IDX)
+    s_rmse, s_mae, s_dca, s_tce, s_far = evaluate_starima(y_raw, mask_raw, SPLIT_IDX)
+    m_rmse, m_mae, m_dca, m_tce, m_far = evaluate_deep_learning("Conventional (MLP)", X_env_only, y_eval, mask_eval, SPLIT_IDX, env_features, num_sites)
+    g_rmse, g_mae, g_dca, g_tce, g_far = evaluate_deep_learning("GRU", X_env_only, y_eval, mask_eval, SPLIT_IDX, env_features, num_sites)
     
     try:
         with open("results/model_metrics.json", "r") as f:
             metrics = json.load(f)
             rmse_stgncde = metrics["test_rmse"]
+            mae_stgncde = metrics.get("test_mae", 0.0) # Extract MAE safely
             stgncde_dca = metrics["test_dca"]
             stgncde_tce = metrics["test_tce"]
             stgncde_far = metrics["test_far"]
     except FileNotFoundError:
         print("\n[WARNING] results/model_metrics.json not found! Run evaluation_metrics.py first.")
         print("Using placeholder values for STG-NCDE.\n")
-        rmse_stgncde, stgncde_dca, stgncde_tce, stgncde_far = 0.1526, 0.0, 0.0, 0.0
+        rmse_stgncde, mae_stgncde, stgncde_dca, stgncde_tce, stgncde_far = 0.1526, 0.0, 0.0, 0.0, 0.0
 
     best_baseline = min(n_rmse, m_rmse, g_rmse, s_rmse if not np.isnan(s_rmse) else float('inf'))
     skill_score = 1.0 - (rmse_stgncde / best_baseline)
 
-    print("\n=========================================================================================")
-    print("                      Baseline Comparison Results                      ")
-    print("=========================================================================================")
-    print(f"Model                      | Test RMSE  | Dir. Acc (DCA) | Trend Err (TCE) | False Alarm")
-    print("-----------------------------------------------------------------------------------------")
-    print(f"(i)   Naive Method         | {n_rmse:.4f}     | {n_dca:5.1f}%          | {n_tce:5.1f}%           | {n_far:5.1f}%")
-    print(f"(ii)  MLP                  | {m_rmse:.4f}     | {m_dca:5.1f}%          | {m_tce:5.1f}%           | {m_far:5.1f}%")
-    print(f"(iii) VAR                  | {s_rmse:.4f}     | {s_dca:5.1f}%          | {s_tce:5.1f}%           | {s_far:5.1f}%")
-    print(f"(iv)  GRU                  | {g_rmse:.4f}     | {g_dca:5.1f}%          | {g_tce:5.1f}%           | {g_far:5.1f}%")
-    print("-----------------------------------------------------------------------------------------")
-    print(f"[*]   Proposed STG-NCDE    | {rmse_stgncde:.4f}     | {stgncde_dca:5.1f}%          | {stgncde_tce:5.1f}%           | {stgncde_far:5.1f}%")
-    print("=========================================================================================\n")
+    print("\n=======================================================================================================")
+    print("                                   Baseline Comparison Results                                   ")
+    print("=======================================================================================================")
+    print(f"Model                      | Test RMSE  | Test MAE   | Dir. Acc (DCA) | Trend Err (TCE) | False Alarm")
+    print("-------------------------------------------------------------------------------------------------------")
+    print(f"(i)   Naive Method         | {n_rmse:.4f}     | {n_mae:.4f}     | {n_dca:5.1f}%          | {n_tce:5.1f}%           | {n_far:5.1f}%")
+    print(f"(ii)  MLP                  | {m_rmse:.4f}     | {m_mae:.4f}     | {m_dca:5.1f}%          | {m_tce:5.1f}%           | {m_far:5.1f}%")
+    print(f"(iii) VAR                  | {s_rmse:.4f}     | {s_mae:.4f}     | {s_dca:5.1f}%          | {s_tce:5.1f}%           | {s_far:5.1f}%")
+    print(f"(iv)  GRU                  | {g_rmse:.4f}     | {g_mae:.4f}     | {g_dca:5.1f}%          | {g_tce:5.1f}%           | {g_far:5.1f}%")
+    print("-------------------------------------------------------------------------------------------------------")
+    print(f"[*]   Proposed STG-NCDE    | {rmse_stgncde:.4f}     | {mae_stgncde:.4f}     | {stgncde_dca:5.1f}%          | {stgncde_tce:5.1f}%           | {stgncde_far:5.1f}%")
+    print("=======================================================================================================\n")
     print(f"Model Skill Score (SS) vs Best Baseline: {skill_score:.3f}")
     print(f"(>0 means model beats all baselines; >0.3 is generally considered highly significant)")
 

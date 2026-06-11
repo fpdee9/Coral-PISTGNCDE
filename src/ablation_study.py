@@ -24,6 +24,46 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 # ==========================================
+# METRICS HELPER FUNCTION
+# ==========================================
+def calculate_trend_metrics(y_true, y_pred, mask):
+    n_sites = y_true.shape[1]
+    correct_directions, total_direction_pairs = 0, 0
+    missed_trend_changes, total_trend_changes = 0, 0
+    false_alarms, stable_trends = 0, 0
+    
+    for s in range(n_sites):
+        site_true, site_pred, site_mask = y_true[:, s, 0], y_pred[:, s, 0], mask[:, s, 0]
+        observed_indices = torch.nonzero(site_mask).squeeze()
+        
+        if len(observed_indices.shape) == 0 or observed_indices.shape[0] < 3: continue 
+            
+        for i in range(1, len(observed_indices)):
+            t_curr, t_prev = observed_indices[i], observed_indices[i-1]
+            true_diff = site_true[t_curr] - site_true[t_prev]
+            pred_diff = site_pred[t_curr] - site_pred[t_prev]
+            
+            if (true_diff > 0 and pred_diff > 0) or (true_diff < 0 and pred_diff < 0): correct_directions += 1
+            total_direction_pairs += 1
+            
+            if i >= 2:
+                t_prev2 = observed_indices[i-2]
+                prev_true_diff = site_true[t_prev] - site_true[t_prev2]
+                actual_sign, prev_actual_sign, pred_sign = torch.sign(true_diff), torch.sign(prev_true_diff), torch.sign(pred_diff)
+                
+                if actual_sign != prev_actual_sign and actual_sign != 0 and prev_actual_sign != 0:
+                    total_trend_changes += 1
+                    if pred_sign != actual_sign: missed_trend_changes += 1
+                elif actual_sign == prev_actual_sign and actual_sign != 0:
+                    stable_trends += 1
+                    if pred_sign != actual_sign: false_alarms += 1
+
+    dca = (correct_directions / max(total_direction_pairs, 1)) * 100
+    tce = (missed_trend_changes / max(total_trend_changes, 1)) * 100
+    far = (false_alarms / max(stable_trends, 1)) * 100
+    return dca, tce, far
+
+# ==========================================
 # BLACK-BOX MODEL (NO PHYSICS)
 # ==========================================
 class BlackBoxNCDE(CoralSTGNCDE):
@@ -79,13 +119,27 @@ def run_ablation(mode):
     num_sites, num_times, _ = X_raw.shape
     SPLIT_IDX = int(num_times * TRAIN_SPLIT)
     
-    # NO SPATIAL GRAPH
+    # Save original DHW purely for evaluation of Heatwave RMSE
+    original_dhw = X_raw[:, :, 1].clone().permute(1, 0).to(DEVICE)
+    
+    # STRUCTURAL ABLATION: NO SPATIAL GRAPH
     if mode == "no_graph":
         print("Severing all spatial connections (Identity Matrix)...")
-        # Every reef is forced to predict in total isolation, ignoring neighbor heatwaves
         adj = torch.eye(num_sites)
     else:
         adj = normalize_adjacency(adj)
+        
+    # FEATURE ABLATION: ZERO OUT CHANNELS
+    if mode == "no_sst":
+        print("Ablating SST feature channel...")
+        X_raw[:, :, 0] = 0.0
+    elif mode == "no_dhw":
+        print("Ablating DHW feature channel...")
+        X_raw[:, :, 1] = 0.0
+    elif mode == "time_only":
+        print("Ablating BOTH SST and DHW feature channels...")
+        X_raw[:, :, 0] = 0.0
+        X_raw[:, :, 1] = 0.0
         
     X_augmented, historical_y, historical_mask = build_augmented_input(X_raw, y, mask, SPLIT_IDX, decay_rate=DECAY_RATE)
     num_features = X_augmented.shape[-1]
@@ -112,6 +166,7 @@ def run_ablation(mode):
     
     OPTIMAL_EPOCHS = 480
     best_test_rmse = float('inf')
+    best_metrics = {}
     
     start_time = time.time()
     for epoch in range(OPTIMAL_EPOCHS):
@@ -145,19 +200,48 @@ def run_ablation(mode):
                 test_mask = mask_test_sparse[SPLIT_IDX:]
                 
                 test_rmse = torch.sqrt(((test_pred - test_y) ** 2 * test_mask).sum() / (test_mask.sum() + 1e-6))
+                
+                # Track best metrics
                 if test_rmse < best_test_rmse:
                     best_test_rmse = test_rmse
+                    test_mae = (torch.abs(test_pred - test_y) * test_mask).sum() / (test_mask.sum() + 1e-6)
+                    dca, tce, far = calculate_trend_metrics(test_y, test_pred, test_mask)
+                    
+                    # Heatwave RMSE calculation using the un-ablated true DHW
+                    test_dhw = original_dhw[SPLIT_IDX:]
+                    bleach_mask = (test_dhw > 1.0).unsqueeze(-1) * test_mask
+                    if bleach_mask.sum() > 0:
+                        bleach_rmse = torch.sqrt(((test_pred - test_y)**2 * bleach_mask).sum() / bleach_mask.sum()).item()
+                    else:
+                        bleach_rmse = float('nan')
+                        
+                    best_metrics = {
+                        'rmse': test_rmse.item(), 
+                        'mae': test_mae.item(), 
+                        'heatwave_rmse': bleach_rmse,
+                        'dca': dca, 
+                        'tce': tce, 
+                        'far': far
+                    }
                     
             print(f"Epoch {epoch+1:03d}/{OPTIMAL_EPOCHS} | {mode.upper()} Test RMSE: {test_rmse:.4f}")
 
-    print(f"\n{mode.upper()} TRAINING COMPLETE.")
-    print(f"Final Best Test RMSE for '{mode}': {best_test_rmse:.4f}")
-    print(f"Time elapsed: {(time.time() - start_time)/60:.1f} minutes.")
-    return best_test_rmse
+    print(f"\n=======================================================")
+    print(f" {mode.upper()} ABLATION RESULTS (For Manuscript Tables) ")
+    print(f"=======================================================")
+    print(f"Test RMSE      : {best_metrics['rmse']:.4f}")
+    print(f"Test MAE       : {best_metrics['mae']:.4f}")
+    print(f"Heatwave RMSE  : {best_metrics['heatwave_rmse']:.4f}")
+    print(f"DCA            : {best_metrics['dca']:.1f}%")
+    print(f"TCE            : {best_metrics['tce']:.1f}%")
+    print(f"FAR            : {best_metrics['far']:.1f}%")
+    print(f"=======================================================\n")
+    
+    return best_metrics['rmse']
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, required=True, choices=['no_graph', 'no_physics'])
+    parser.add_argument('--mode', type=str, required=True, choices=['no_graph', 'no_physics', 'no_sst', 'no_dhw', 'time_only'])
     args = parser.parse_args()
     
     set_seed(SEED) # Reproducibility lock successfully placed here

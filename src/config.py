@@ -31,7 +31,7 @@ SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 6. Biological Physics
-DHW_BLEACHING_THRESHOLD = 1.0       
+DHW_BLEACHING_THRESHOLD = 4.0       
 RECOVERY_SUPPRESSION_THRESHOLD = 3.0 
 TRAUMA_SCALE = 50.0                 
 NEURAL_RECOVERY_SCALE = 25.0 

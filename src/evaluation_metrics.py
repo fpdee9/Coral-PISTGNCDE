@@ -90,6 +90,11 @@ def main():
     
     train_rmse = torch.sqrt(((train_preds - train_y)**2 * train_mask).sum() / (train_mask.sum() + 1e-6)).item()
     test_rmse = torch.sqrt(((test_preds - test_y)**2 * test_mask).sum() / (test_mask.sum() + 1e-6)).item()
+    
+    # MAE CALCULATION ADDED HERE
+    train_mae = (torch.abs(train_preds - train_y) * train_mask).sum() / (train_mask.sum() + 1e-6)
+    test_mae = (torch.abs(test_preds - test_y) * test_mask).sum() / (test_mask.sum() + 1e-6)
+    
     bleach_rmse = calculate_bleaching_rmse(test_y, test_preds, test_mask, test_dhw, threshold=1.0)
     pearson_r = calculate_pearson_r(test_y, test_preds, test_mask)
     
@@ -105,13 +110,14 @@ def main():
     print(f"1. Predictive Acc (Train RMSE)   : {train_rmse:.4f}")
     print(f"2. Predictive Acc (Test RMSE)    : {test_rmse:.4f}")
     print(f"   > Generalization Gap          : {gen_gap:+.4f}")
-    print(f"3. Heatwave Stress RMSE          : {bleach_rmse:.4f} (During DHW > 1.0)")
-    print(f"4. Pearson Correlation (r)       : {pearson_r:.4f}")
+    print(f"3. Mean Absolute Error (MAE)     : {test_mae.item():.4f}") # Added MAE Print
+    print(f"4. Heatwave Stress RMSE          : {bleach_rmse:.4f} (During DHW > 1.0)")
+    print(f"5. Pearson Correlation (r)       : {pearson_r:.4f}")
     print(f"-------------------------------------------")
-    print(f"5. Directional Accuracy (Test DCA) : {test_dca:.1f}%")
+    print(f"6. Directional Accuracy (Test DCA) : {test_dca:.1f}%")
     print(f"   > Train DCA: {train_dca:.1f}% | Gap: {dca_gap:+.1f}%")
-    print(f"6. Trend Change Error (Test TCE)   : {test_tce:.1f}%")
-    print(f"7. False Alarm Rate (Test FAR)     : {test_far:.1f}%")
+    print(f"7. Trend Change Error (Test TCE)   : {test_tce:.1f}%")
+    print(f"8. False Alarm Rate (Test FAR)     : {test_far:.1f}%")
     print("===========================================\n")
     
     print("Exporting metrics for baseline comparison...")
@@ -119,6 +125,7 @@ def main():
     with open("results/model_metrics.json", "w") as f:
         json.dump({
             "test_rmse": test_rmse, 
+            "test_mae": test_mae.item(), # Added MAE Export
             "bleach_rmse": bleach_rmse,
             "pearson_r": pearson_r,
             "test_dca": test_dca,
